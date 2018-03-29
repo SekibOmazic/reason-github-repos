@@ -1,0 +1,20 @@
+{
+  "name": "reason-parcel",
+  "reason": {
+    "react-jsx": 2
+  },
+  "refmt": 3,
+  "sources": "src",
+  "dependencies": [],
+  "package-specs": {
+    "module": "commonjs",
+    "in-source": true
+  },
+  "suffix": ".bs.js",
+  "namespace": true,
+  "bs-dependencies": [
+    "bs-fetch",
+    "@glennsl/bs-json",
+    "reason-react"
+  ]
+}
