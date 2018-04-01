@@ -7,6 +7,38 @@ module RemoteData = {
     | Success('a);
 };
 
+module Http = {
+  type error =
+    | Timeout
+    | NetworkError
+    | BadStatus(int, string);
+  /* return a result with either json or an error defined above */
+  let getJSON = (url: string) : Js.Promise.t(Js.Result.t(Js.Json.t, error)) =>
+    Js.Promise.(
+      Fetch.fetch(url)
+      |> then_(value => {
+           Js.log(value);
+           let status = value |> Fetch.Response.status;
+           let statusText = value |> Fetch.Response.statusText;
+           switch status {
+           | 0 => Js.Result.Error(NetworkError) |> resolve /* can this happen here? */
+           | 408 => Js.Result.Error(Timeout) |> resolve
+           | status when status < 200 =>
+             Js.Result.Error(BadStatus(status, statusText)) |> resolve
+           | status when status >= 300 =>
+             BadStatus(status, statusText)
+             |> (err => Js.Result.Error(err))
+             |> resolve
+           | _ =>
+             value
+             |> Fetch.Response.json
+             |> then_(json => Js.Result.Ok(json) |> resolve)
+           };
+         })
+      |> catch(_err => Js.Result.Error(NetworkError) |> resolve)
+    );
+};
+
 type repo = {
   id: int,
   owner: string,
@@ -27,7 +59,7 @@ type action =
   | ChangeUsername(string)
   | LoadRepos
   | ReposLoaded(list(repo))
-  | ReposFailedToLoad;
+  | ReposFailedToLoad(string);
 
 let forkPath = "M8 1a1.993 1.993 0 0 0-1 3.72V6L5 8 3 6V4.72A1.993 1.993 0 0 0 2 1a1.993 1.993 0 0 0-1 3.72V6.5l3 3v1.78A1.993 1.993 0 0 0 5 15a1.993 1.993 0 0 0 1-3.72V9.5l3-3V4.72A1.993 1.993 0 0 0 8 1zM2 4.2C1.34 4.2.8 3.65.8 3c0-.65.55-1.2 1.2-1.2.65 0 1.2.55 1.2 1.2 0 .65-.55 1.2-1.2 1.2zm3 10c-.66 0-1.2-.55-1.2-1.2 0-.65.55-1.2 1.2-1.2.65 0 1.2.55 1.2 1.2 0 .65-.55 1.2-1.2 1.2zm3-10c-.66 0-1.2-.55-1.2-1.2 0-.65.55-1.2 1.2-1.2.65 0 1.2.55 1.2 1.2 0 .65-.55 1.2-1.2 1.2z";
 
@@ -58,10 +90,8 @@ let parseResponse = (json: Js.Json.t) : list(repo) =>
      )
   |> Array.to_list;
 
-/* TODO: this is not used yet */
-let parseError = err : string => Json.Decode.(err |> field("message", string));
-
-let fetchRepos = (username, send) =>
+/* old, not used */
+let fetchReposOld = (username, send) =>
   Js.Promise.(
     Fetch.fetch(
       "https://api.github.com/users/"
@@ -81,11 +111,47 @@ let fetchRepos = (username, send) =>
          |> (
            err => {
              Js.log(err);
-             ReposFailedToLoad;
+             ReposFailedToLoad("Uh, oh, failed to load repositories");
            }
          )
          |> send
          |> resolve
+       )
+  )
+  |> ignore;
+
+let fetchRepos = (username, send) =>
+  Js.Promise.(
+    Http.getJSON(
+      "https://api.github.com/users/"
+      ++ username
+      ++ "/repos?type=all&sort=updated"
+    )
+    |> then_(result =>
+         (
+           switch result {
+           | Js.Result.Ok(json) =>
+             json |> parseResponse |> (repos => ReposLoaded(repos)) |> send
+           | Js.Result.Error(err) =>
+             (
+               switch err {
+               | Http.Timeout => "connection timeout"
+               | Http.NetworkError => "No internet connection!"
+               | Http.BadStatus(status, statusText) =>
+                 "request failed with status "
+                 ++ string_of_int(status)
+                 ++ ". Message: "
+                 ++ statusText
+               }
+             )
+             |> (msg => ReposFailedToLoad(msg))
+             |> send
+           }
+         )
+         |> resolve
+       )
+    |> catch(_err =>
+         ReposFailedToLoad("could not parse json") |> send |> resolve
        )
   )
   |> ignore;
@@ -155,11 +221,8 @@ let make = _children => {
       )
     | ReposLoaded(repos) =>
       ReasonReact.Update({...state, repos: RemoteData.Success(repos)})
-    | ReposFailedToLoad =>
-      ReasonReact.Update({
-        ...state,
-        repos: RemoteData.Failure("Uh, oh, failed to load repos")
-      })
+    | ReposFailedToLoad(msg) =>
+      ReasonReact.Update({...state, repos: RemoteData.Failure(msg)})
     },
   render: ({state, send}) =>
     <div
