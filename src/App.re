@@ -12,7 +12,6 @@ module Http = {
     | Timeout
     | NetworkError
     | BadStatus(int, string);
-  /* return a result with either json or an error defined above */
   let getJSON = (url: string) : Js.Promise.t(Js.Result.t(Js.Json.t, error)) =>
     Js.Promise.(
       Fetch.fetch(url)
@@ -90,35 +89,16 @@ let parseResponse = (json: Js.Json.t) : list(repo) =>
      )
   |> Array.to_list;
 
-/* old, not used */
-let fetchReposOld = (username, send) =>
-  Js.Promise.(
-    Fetch.fetch(
-      "https://api.github.com/users/"
-      ++ username
-      ++ "/repos?type=all&sort=updated"
-    )
-    |> then_(Fetch.Response.json)
-    |> then_(json =>
-         json
-         |> parseResponse
-         |> (repos => ReposLoaded(repos))
-         |> send
-         |> resolve
-       )
-    |> catch(err =>
-         err
-         |> (
-           err => {
-             Js.log(err);
-             ReposFailedToLoad("Uh, oh, failed to load repositories");
-           }
-         )
-         |> send
-         |> resolve
-       )
-  )
-  |> ignore;
+let messageFromError = (err: Http.error) : string =>
+  switch err {
+  | Http.Timeout => "connection timeout"
+  | Http.NetworkError => "No internet connection!"
+  | Http.BadStatus(status, statusText) =>
+    "request failed with status "
+    ++ string_of_int(status)
+    ++ ". Message: "
+    ++ statusText
+  };
 
 let fetchRepos = (username, send) =>
   Js.Promise.(
@@ -133,19 +113,7 @@ let fetchRepos = (username, send) =>
            | Js.Result.Ok(json) =>
              json |> parseResponse |> (repos => ReposLoaded(repos)) |> send
            | Js.Result.Error(err) =>
-             (
-               switch err {
-               | Http.Timeout => "connection timeout"
-               | Http.NetworkError => "No internet connection!"
-               | Http.BadStatus(status, statusText) =>
-                 "request failed with status "
-                 ++ string_of_int(status)
-                 ++ ". Message: "
-                 ++ statusText
-               }
-             )
-             |> (msg => ReposFailedToLoad(msg))
-             |> send
+             err |> messageFromError |> (msg => ReposFailedToLoad(msg)) |> send
            }
          )
          |> resolve
